@@ -1,8 +1,7 @@
 import flask
 from flask import Flask, request, jsonify
 import numpy as np
-import tensorflow as tf
-import joblib
+# TensorFlow removed for cloud deployment
 import logging
 import requests
 import os
@@ -184,3 +183,4 @@ if __name__ == '__main__':
     # Démarrer Flask
 
     app.run(host='0.0.0.0', port=5000, debug=False)
+
