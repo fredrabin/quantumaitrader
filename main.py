@@ -809,11 +809,19 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(stats_msg, parse_mode='Markdown')
 
 def run_telegram_bot():
-    """Lance le bot Telegram"""
+    """Lance le bot Telegram avec gestion d'événements"""
     try:
+        import asyncio
+        
+        # Crée un nouvel event loop pour le thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("stats", stats_command))
+        
+        print("🤖 Bot Telegram en cours de démarrage...")
         application.run_polling()
     except Exception as e:
         print(f"❌ Erreur bot Telegram: {e}")
@@ -845,4 +853,5 @@ if __name__ == '__main__':
     print("📈 Performance: /performance")
     print("📊 Positions: /positions")
     
+
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
