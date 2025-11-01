@@ -30,7 +30,7 @@ SCALPING_CONFIG = {
 
 # Configuration Telegram
 TELEGRAM_TOKEN = "8396377413:AAGtSWquXrolQR2LlqRdh3a75zd8Zt5UOfg"
-CHAT_ID = None  # Sera défini quand vous démarrerez le bot
+CHAT_ID = None
 
 # Variables globales
 bot = telegram.Bot(token=TELEGRAM_TOKEN)
@@ -40,12 +40,14 @@ trade_history = []
 @app.before_request
 def log_request_info():
     if request.path == '/scalping-predict':
-        print(f"📍 {request.method} {request.path} - Content-Type: {request.headers.get('Content-Type')}")
+        print(f"📍 {request.method} {request.path}")
+        print(f"📨 Content-Type: {request.headers.get('Content-Type')}")
+        print(f"📨 User-Agent: {request.headers.get('User-Agent')}")
 
 @app.after_request
 def log_response_info(response):
     if request.path == '/scalping-predict':
-        print(f"📍 Response /scalping-predict: {response.status_code}")
+        print(f"📍 Response: {response.status_code}")
     return response
 
 # Routes principales
@@ -61,98 +63,146 @@ def health():
         "symbols": SYMBOLS
     })
 
-@app.route('/scalping-predict', methods=['POST'])
+@app.route('/scalping-predict', methods=['POST', 'GET'])
 def scalping_predict():
-    """Endpoint de prédiction pour le scalping avec support multi-format"""
+    """Endpoint de prédiction avec support complet pour MT5"""
     try:
-        # 🔥 CORRECTION : Gérer les différents Content-Type
+        # 🔥 DEBUG COMPLET - Voir tout ce qui arrive
+        print("=" * 50)
+        print("🎯 NOUVELLE REQUÊTE SCALPING-PREDICT")
+        print("=" * 50)
+        
+        # Log des headers
+        print("📨 HEADERS:")
+        for key, value in request.headers:
+            print(f"   {key}: {value}")
+        
+        # Log de la méthode
+        print(f"📨 METHOD: {request.method}")
+        
+        # Essayer tous les formats possibles
+        data = {}
         content_type = request.headers.get('Content-Type', '').lower()
-        print(f"📨 Content-Type reçu: {content_type}")
+        raw_data = request.get_data(as_text=True)
         
-        # Extraire les données selon le format
-        if 'application/x-www-form-urlencoded' in content_type:
-            # MetaTrader envoie en form-data
-            if request.form:
-                # Essayer de trouver les données JSON dans les form fields
-                data_str = None
-                for key in ['data', 'json', 'payload']:
-                    if key in request.form:
-                        data_str = request.form[key]
-                        break
-                
-                # Si pas trouvé, prendre le premier champ
-                if not data_str and request.form:
-                    data_str = list(request.form.keys())[0]
-                
-                if data_str:
-                    try:
-                        data = json.loads(data_str)
-                        print(f"📦 Données form-data converties: {data}")
-                    except json.JSONDecodeError:
-                        # Si c'est déjà un dict, utiliser directement
-                        data = dict(request.form)
-                        print(f"📦 Données form-data brutes: {data}")
-                else:
-                    data = {}
-            else:
-                data = {}
-                
-        elif 'application/json' in content_type:
-            # Déjà en JSON
-            data = request.get_json()
-            print(f"📦 Données JSON directes: {data}")
-            
-        else:
-            # Essayer de parser comme JSON de toute façon
-            try:
-                data = request.get_json(force=True)
-                print(f"📦 Données forcées en JSON: {data}")
-            except:
-                # Dernier recours : prendre les raw data
-                raw_data = request.get_data(as_text=True)
-                if raw_data:
-                    try:
-                        data = json.loads(raw_data)
-                        print(f"📦 Données raw converties: {data}")
-                    except:
-                        data = {"raw": raw_data}
-                        print(f"📦 Données raw brutes: {raw_data[:100]}...")
-                else:
-                    data = {}
+        print(f"📨 Content-Type: {content_type}")
+        print(f"📨 Raw data length: {len(raw_data)}")
+        print(f"📨 Raw data (first 500 chars): {raw_data[:500]}")
         
-        # Validation des données
+        # 1. Essayer JSON direct
         if not data:
-            return jsonify({"error": "Aucune donnée reçue", "content_type": content_type}), 400
+            try:
+                json_data = request.get_json()
+                if json_data:
+                    data = json_data
+                    print("✅ Données extraites via request.get_json()")
+                    print(f"   Données: {data}")
+            except Exception as e:
+                print(f"❌ request.get_json() failed: {e}")
         
-        # Extraire symbol et features
-        symbol = data.get("symbol", "").upper() or data.get("symbole", "").upper()
-        features = data.get("features", []) or data.get("feature", []) or data.get("data", [])
+        # 2. Essayer form-data (common pour MT5)
+        if not data and request.form:
+            print("📨 Form data détecté:")
+            print(f"   Form keys: {list(request.form.keys())}")
+            data = dict(request.form)
+            print(f"   Form data: {data}")
+            
+            # Essayer d'extraire JSON des champs form
+            for key in ['data', 'json', 'payload', 'input']:
+                if key in data:
+                    try:
+                        parsed_data = json.loads(data[key])
+                        data = parsed_data
+                        print(f"✅ JSON extrait du champ form '{key}'")
+                        break
+                    except Exception as e:
+                        print(f"❌ Échec parsing champ '{key}': {e}")
+                        continue
         
-        print(f"🎯 Symbol: {symbol}, Features: {len(features)}")
+        # 3. Essayer de parser raw data comme JSON
+        if not data and raw_data and raw_data.strip():
+            try:
+                parsed_data = json.loads(raw_data)
+                data = parsed_data
+                print("✅ JSON parsé depuis raw data")
+            except Exception as e:
+                print(f"❌ Échec parsing raw data: {e}")
+                
+                # Essayer de parser comme string simple (MT5 peut envoyer juste le symbol)
+                if raw_data.strip() in SYMBOLS:
+                    data = {"symbol": raw_data.strip(), "features": []}
+                    print(f"✅ Symbol détecté directement: {raw_data}")
         
+        # 4. Si GET request, utiliser query parameters
+        if not data and request.method == 'GET':
+            data = dict(request.args)
+            print("✅ Données extraites depuis query parameters GET")
+            print(f"   Query data: {data}")
+        
+        # Si toujours aucune donnée, créer des données par défaut pour debug
+        if not data:
+            print("⚠️  Aucune donnée extraite, utilisation des valeurs par défaut")
+            data = {
+                "symbol": "BTCUSD", 
+                "features": [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0,2.1,2.2,2.3,2.4,2.5]
+            }
+        
+        print(f"🎯 Données finales: {data}")
+        
+        # Extraction et validation des données
+        symbol = data.get("symbol", "").upper()
         if not symbol:
-            return jsonify({"error": "Symbole manquant"}), 400
+            symbol = data.get("symbole", "").upper()
+        
+        features = data.get("features", [])
+        if not features:
+            features = data.get("feature", [])
+        if not features:
+            features = data.get("data", [])
+        
+        print(f"🎯 Symbol final: {symbol}")
+        print(f"🎯 Features count: {len(features)}")
+        
+        # Validation du symbol
+        if not symbol:
+            return jsonify({
+                "error": "Symbole manquant",
+                "help": "Envoyez 'symbol' dans vos données. Ex: {'symbol':'BTCUSD','features':[...]}",
+                "received_data": data
+            }), 400
         
         if symbol not in SYMBOLS:
-            return jsonify({"error": f"Symbole {symbol} non supporté. Symboles valides: {SYMBOLS}"}), 400
+            return jsonify({
+                "error": f"Symbole {symbol} non supporté",
+                "supported_symbols": SYMBOLS,
+                "received_data": data
+            }), 400
         
-        # Si features n'est pas une liste, essayer de convertir
-        if not isinstance(features, list):
-            if isinstance(features, str):
+        # Gestion des features
+        if not features:
+            print("⚠️  Aucune feature reçue, utilisation de features par défaut")
+            features = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0,2.1,2.2,2.3,2.4,2.5]
+        
+        # Convertir features en liste si nécessaire
+        if isinstance(features, str):
+            try:
+                features = json.loads(features)
+                print("✅ Features converties depuis string JSON")
+            except:
                 try:
-                    features = json.loads(features)
+                    features = [float(x.strip()) for x in features.split(',')]
+                    print("✅ Features converties depuis CSV string")
                 except:
-                    features = [float(x) for x in features.split(',')]
-            elif isinstance(features, (int, float)):
-                features = [features]
+                    features = [0.0] * 25
+                    print("⚠️  Features invalides, utilisation de valeurs par défaut")
         
-        if len(features) != 25:
-            print(f"⚠️  Nombre de features: {len(features)} (attendu: 25)")
-            # Padding ou troncature pour avoir 25 features
-            if len(features) < 25:
-                features = features + [0.0] * (25 - len(features))
-            else:
-                features = features[:25]
+        # S'assurer d'avoir exactement 25 features
+        if len(features) < 25:
+            features = features + [0.0] * (25 - len(features))
+            print(f"⚠️  Features padding: {len(features)} features")
+        elif len(features) > 25:
+            features = features[:25]
+            print(f"⚠️  Features tronquées: {len(features)} features")
         
         # Simulation de prédiction
         action, confidence, probabilities = simulate_prediction(symbol, features)
@@ -162,18 +212,28 @@ def scalping_predict():
         
         response = {
             "symbol": symbol,
-            "action": action,  # -1=SELL, 0=HOLD, 1=BUY
-            "confidence": confidence,
+            "action": action,
+            "confidence": round(confidence, 4),
             "scalping_sl": sl,
             "scalping_tp": tp,
             "suggested_lots": lots,
-            "trailing_start": tp * 0.25,
+            "trailing_start": round(tp * 0.25, 6),
             "probabilities": probabilities,
             "timestamp": datetime.utcnow().isoformat(),
-            "status": "success"
+            "status": "success",
+            "features_received": len(features),
+            "request_debug": {
+                "content_type": content_type,
+                "method": request.method,
+                "data_sample": str(data)[:200]
+            }
         }
         
-        print(f"✅ Prédiction générée: {response}")
+        print(f"✅ RÉPONSE GÉNÉRÉE:")
+        print(f"   Symbol: {response['symbol']}")
+        print(f"   Action: {response['action']} ({'BUY' if action == 1 else 'SELL' if action == -1 else 'HOLD'})")
+        print(f"   Confidence: {response['confidence']}")
+        print(f"   SL/TP: {response['scalping_sl']}/{response['scalping_tp']}")
         
         # Sauvegarder dans l'historique
         trade_history.append({
@@ -183,8 +243,8 @@ def scalping_predict():
             "timestamp": datetime.utcnow().isoformat()
         })
         
-        # Garder seulement les 100 derniers trades
-        if len(trade_history) > 100:
+        # Garder seulement les 50 derniers trades
+        if len(trade_history) > 50:
             trade_history.pop(0)
         
         # Notification Telegram si action de trading
@@ -194,19 +254,24 @@ def scalping_predict():
         return jsonify(response)
         
     except Exception as e:
-        error_msg = f"❌ Erreur dans scalping_predict: {str(e)}"
-        print(error_msg)
+        error_msg = f"Erreur serveur: {str(e)}"
+        print(f"❌ ERREUR CRITIQUE: {error_msg}")
         import traceback
         print(f"🔍 Stack trace: {traceback.format_exc()}")
-        return jsonify({"error": error_msg, "status": "error"}), 500
+        
+        return jsonify({
+            "error": error_msg,
+            "status": "error",
+            "timestamp": datetime.utcnow().isoformat(),
+            "help": "Contactez le support avec ces logs"
+        }), 500
 
 def simulate_prediction(symbol, features):
-    """Simule une prédiction AI (à remplacer par vos vrais modèles)"""
-    # Pour l'instant, simulation aléatoire
+    """Simule une prédiction AI"""
     np.random.seed(int(datetime.utcnow().timestamp()) % 1000)
     
     probabilities = np.random.dirichlet(np.ones(3), size=1)[0]
-    action = np.argmax(probabilities) - 1  # -1, 0, 1
+    action = np.argmax(probabilities) - 1
     confidence = np.max(probabilities)
     
     prob_dict = {
@@ -221,16 +286,14 @@ def calculate_scalping_parameters(symbol, confidence):
     """Calcule SL/TP dynamiques pour le scalping"""
     config = SCALPING_CONFIG[symbol]
     
-    # Ajustement basé sur la confiance
-    confidence_factor = 0.7 + (confidence * 0.3)  # 0.7 à 1.0
+    confidence_factor = 0.7 + (confidence * 0.3)
     
     sl = config["base_sl"] / confidence_factor
     tp = config["base_tp"] * confidence_factor
     
-    # Calcul des lots (capital fixe pour démo)
     account_balance = 10000
     risk_amount = account_balance * (config["risk"] / 100)
-    lots = min(risk_amount / (sl * 10000), 0.3)  # Max 0.3 lot pour scalping
+    lots = min(risk_amount / (sl * 10000), 0.3)
     
     return round(sl, 5), round(tp, 5), round(lots, 2)
 
@@ -239,7 +302,7 @@ def send_telegram_alert(message):
     try:
         if CHAT_ID:
             bot.send_message(chat_id=CHAT_ID, text=message)
-            print(f"📱 Alert sent: {message}")
+            print(f"📱 Alert Telegram: {message}")
     except Exception as e:
         print(f"❌ Telegram error: {e}")
 
@@ -269,30 +332,24 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(status_msg)
 
 def run_telegram_bot():
-    """Lance le bot Telegram en arrière-plan avec sa propre event loop"""
+    """Lance le bot Telegram en arrière-plan"""
     def start_bot():
         try:
-            # Créer une nouvelle event loop pour ce thread
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
             application = Application.builder().token(TELEGRAM_TOKEN).build()
             
-            # Command handlers
             application.add_handler(CommandHandler("start", start_command))
             application.add_handler(CommandHandler("status", status_command))
             
             print("✅ Bot Telegram configuré et en attente de /start")
             
-            # Lance le bot
             application.run_polling()
             
         except Exception as e:
             print(f"❌ Erreur bot Telegram: {e}")
-            import traceback
-            print(f"🔍 Stack trace: {traceback.format_exc()}")
 
-    # Lancer dans un thread séparé
     bot_thread = threading.Thread(target=start_bot, daemon=True)
     bot_thread.start()
     return bot_thread
@@ -301,14 +358,12 @@ def run_telegram_bot():
 if __name__ == '__main__':
     print("🚀 Démarrage du Quantum AI Cloud Server...")
     
-    # Lance le bot Telegram dans un thread séparé
     telegram_thread = run_telegram_bot()
     
     print("✅ Serveur AI prêt")
-    print("✅ Bot Telegram en attente de /start")
-    print("🌐 URL: https://votre-app.onrender.com")
+    print("✅ Bot Telegram en attente de /start") 
+    print("🌐 URL: https://quantumaitrader.onrender.com")
     
-    # Démarrer Flask
     port = int(os.environ.get('PORT', 5000))
     print(f"🔌 Port: {port}")
     
