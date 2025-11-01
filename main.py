@@ -12,6 +12,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import threading
 import time
+import asyncio
 
 # Configuration Flask
 app = Flask(__name__)
@@ -56,6 +57,8 @@ def scalping_predict():
         symbol = data.get("symbol", "").upper()
         features = data.get("features", [])
         
+        print(f"📥 Requête reçue - Symbol: {symbol}, Features: {len(features)}")
+        
         if symbol not in SYMBOLS:
             return jsonify({"error": f"Symbole {symbol} non supporté"}), 400
         
@@ -80,6 +83,8 @@ def scalping_predict():
             "timestamp": datetime.utcnow().isoformat()
         }
         
+        print(f"✅ Prédiction générée: {response}")
+        
         # Notification Telegram si action de trading
         if action != 0 and confidence > 0.6:
             send_telegram_alert(f"🎯 Signal {symbol}: {'BUY' if action == 1 else 'SELL'} | Confiance: {confidence:.2f} | Lots: {lots}")
@@ -87,6 +92,9 @@ def scalping_predict():
         return jsonify(response)
         
     except Exception as e:
+        print(f"❌ Erreur dans scalping_predict: {str(e)}")
+        import traceback
+        print(f"🔍 Stack trace: {traceback.format_exc()}")
         return jsonify({"error": str(e)}), 500
 
 def simulate_prediction(symbol, features):
@@ -158,29 +166,57 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(status_msg)
 
 def run_telegram_bot():
-    """Lance le bot Telegram en arrière-plan"""
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # Command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("status", status_command))
-    
-    # Lance le bot
-    application.run_polling()
+    """Lance le bot Telegram en arrière-plan avec sa propre event loop"""
+    def start_bot():
+        try:
+            # Créer une nouvelle event loop pour ce thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            application = Application.builder().token(TELEGRAM_TOKEN).build()
+            
+            # Command handlers
+            application.add_handler(CommandHandler("start", start_command))
+            application.add_handler(CommandHandler("status", status_command))
+            
+            print("✅ Bot Telegram configuré et en attente de /start")
+            
+            # Lance le bot
+            application.run_polling()
+            
+        except Exception as e:
+            print(f"❌ Erreur bot Telegram: {e}")
+            import traceback
+            print(f"🔍 Stack trace: {traceback.format_exc()}")
+
+    # Lancer dans un thread séparé
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
+    return bot_thread
+
+# Middleware de logging pour debug
+@app.before_request
+def log_request_info():
+    if request.method == 'POST' and request.path == '/scalping-predict':
+        print(f"📍 POST /scalping-predict - Content-Type: {request.content_type}")
+
+@app.after_request
+def log_response_info(response):
+    if request.path == '/scalping-predict':
+        print(f"📍 Response /scalping-predict: {response.status_code}")
+    return response
 
 # Démarrage
 if __name__ == '__main__':
     print("🚀 Démarrage du Quantum AI Cloud Server...")
     
     # Lance le bot Telegram dans un thread séparé
-    telegram_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-    telegram_thread.start()
+    telegram_thread = run_telegram_bot()
     
     print("✅ Serveur AI prêt")
     print("✅ Bot Telegram en attente de /start")
-    print("🌐 URL: https://votre-app.googlecloud.com")
+    print("🌐 URL: https://votre-app.onrender.com")
     
     # Démarrer Flask
-
-    app.run(host='0.0.0.0', port=5000, debug=False)
-
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
